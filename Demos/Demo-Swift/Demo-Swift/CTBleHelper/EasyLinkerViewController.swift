@@ -72,6 +72,8 @@ class EasyLinkerViewController: UIViewController {
         super.viewDidLoad()
         // Do any additional setup after loading the view, typically from a nib.
 
+        self.navigationController?.navigationBar.isTranslucent = false
+
         self.title = "CTEasyLinker";
         self.view.backgroundColor = UIColor.XF_f6Gray
 
@@ -121,6 +123,11 @@ class EasyLinkerViewController: UIViewController {
         CTConfig.shared()?.debugLogHandler = { (log: String?) in
             weakSelf?.xf_Log(logX: log! as NSString)
         }
+        CTConfig.shared()?.blueStripDetectionHandler = { (blueStripImage:UIImage?) in
+            weakSelf?.xf_Log(logX: "当前图片检测到蓝条，可选择记录日志或者图片数据。")
+        }  // 1.0.17 新增，蓝条检测
+        //CTConfig.shared()?.blueStripDetectionType = 1
+        CTConfig.shared()?.channelSetting = -1  // 1.0.17 新增，AP模式，随机信道
         CTConfig.shared()?.splitStrings = ["!@"]
 
         NotificationCenter.default.addObserver(self, selector: #selector(CT_Device_ScanUpdate(noti:)),
@@ -139,7 +146,9 @@ class EasyLinkerViewController: UIViewController {
         CTEasyLinker.sharedEsay().hotspotEnabled = true
 
         CTEasyLinker.sharedEsay().preparedForAP = { (ssid, password) in
-            
+            DispatchQueue.main.async {
+                weakSelf?.preparedForAP(ssid: ssid as String, password: password as String)
+            }
         }
 
         CTEasyLinker.sharedEsay().preparedForSTA = { (ssid: String) in
@@ -412,7 +421,7 @@ class EasyLinkerViewController: UIViewController {
                                                 weakSelf?.maskView.isHidden = true
                                                 weakSelf?.xf_Log(logX: "已取消ap连接.")
         }))
-        apAlert.addAction(UIAlertAction.init(title: "", style: UIAlertAction.Style.default, handler: { (action: UIAlertAction) in
+        apAlert.addAction(UIAlertAction.init(title: "前往", style: UIAlertAction.Style.default, handler: { (action: UIAlertAction) in
             XF_ApplicationOpenSettings(type: 2)
 
             weakSelf?.apLinkCheck = true
@@ -1357,6 +1366,7 @@ class EasyLinkerViewController: UIViewController {
 
         weak var weakSelf = self
 
+        //let cameraCtr: CameraHelperViewController = CameraHelperViewController()
         let cameraCtr: EasyCameraViewController = EasyCameraViewController()
         cameraCtr.ip = self.ip as String
         cameraCtr.handler_log = { (log: NSString) in

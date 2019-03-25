@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import Photos
 
 class EasyCameraViewController: UIViewController {
 
@@ -29,6 +30,7 @@ class EasyCameraViewController: UIViewController {
     var failureCount: Int = 0
 
     var loaded: Bool = false
+    var apiTest2IsAvailable = false
 
     deinit {
         self.cameraView.removeFromSuperview()
@@ -36,6 +38,10 @@ class EasyCameraViewController: UIViewController {
 
         self.stopCamera()
         self.resetCameraAfterCtrDealloc()
+    }
+
+    override var prefersStatusBarHidden: Bool {
+        return true
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -199,6 +205,20 @@ class EasyCameraViewController: UIViewController {
                     return
                 }
 
+                if ((CTConfig.shared()?.blueStripDetectionHandler) != nil) {
+                    var isBlue: Bool = CTConfig.examineBlueStrip(UIImage.init(data: rgbData))
+                    if isBlue {
+                        weakSelf?.showAlertViewMsg(msg: "照片拍摄失败，检测到蓝条，请重试.")
+                        return
+                    }
+
+                    isBlue = CTConfig.examineBlueStrip(UIImage.init(data: plData))
+                    if isBlue {
+                        weakSelf?.showAlertViewMsg(msg: "照片拍摄失败，检测到蓝条，请重试.")
+                        return
+                    }
+                }
+
                 weakSelf?.displayLayer = false
                 let imageView: UIImageView = weakSelf!.displayView.subviews.first as! UIImageView
                 imageView.image = UIImage.init(data: rgbData)
@@ -206,7 +226,7 @@ class EasyCameraViewController: UIViewController {
                 UIView.animate(withDuration: 0.3, animations: {
                     weakSelf?.displayView.alpha = 1.0
                 }, completion: { (finished) in
-                    //FIXME:
+                    weakSelf?.apiTest2IsAvailable = false
                 })
             }
         }
@@ -244,7 +264,41 @@ class EasyCameraViewController: UIViewController {
     }
 
     @objc func displayViewSaveBtnClick(sender: UIButton) {
-        //FIXME:
+        weak var weakSelf = self
+        self.PhotosRightsCheckAndRequest(request: true) { (authorized, status, error) in
+            DispatchQueue.main.async {
+                if !authorized {
+                    weakSelf?.showAlertViewMsg(msg: "保存失败，未取得相册访问权限")
+                    return
+                }
+
+                let rgbName: String = (weakSelf?.GetFilePath(fileName: "rgbName"))!
+                let plName: String = (weakSelf?.GetFilePath(fileName: "plName"))!
+
+                weakSelf?.successCount = 0
+                weakSelf?.failureCount = 0
+
+                PHPhotoLibrary.shared().performChanges({
+                    let rgbImage: UIImage = UIImage.init(data: (weakSelf?.ReadFileAtPath(path: rgbName))!)!
+                    let req: PHAssetChangeRequest = PHAssetChangeRequest.creationRequestForAsset(from: rgbImage)
+                    NSLog("rgb - %@", (req.placeholderForCreatedAsset?.localIdentifier)!)
+                }, completionHandler: { (success, error) in
+                    weakSelf?.successCount += success ? 1 : 0
+                    weakSelf?.failureCount += success ? 0 : 1
+                    weakSelf?.photoSavedCheckIsRgb(isRgb: true, success: success)
+                })
+
+                PHPhotoLibrary.shared().performChanges({
+                    let plImage: UIImage = UIImage.init(data: (weakSelf?.ReadFileAtPath(path: plName))!)!
+                    let req: PHAssetChangeRequest = PHAssetChangeRequest.creationRequestForAsset(from: plImage)
+                    NSLog("pl - %@", (req.placeholderForCreatedAsset?.localIdentifier)!)
+                }, completionHandler: { (success, error) in
+                    weakSelf?.successCount += success ? 1 : 0
+                    weakSelf?.failureCount += success ? 0 : 1
+                    weakSelf?.photoSavedCheckIsRgb(isRgb: false, success: success)
+                })
+            }
+        }
     }
 
     //MARK: 图像检测api，测试样例
@@ -303,6 +357,46 @@ class EasyCameraViewController: UIViewController {
         return false
     }
 
+    //MARK: > photo operation <
+    func PhotosRightsCheckAndRequest(request: Bool, completion: ((_ authorized: Bool, _ status: XFUserAuthorizationStatus, _ error: NSError) -> Void)?) {
+        let available: Bool = UIImagePickerController.isSourceTypeAvailable(UIImagePickerController.SourceType.photoLibrary)
+        if !available {
+            completion?(false, XFUserAuthorizationStatus.NotSupport, NSError())
+            return
+        }
+
+        let authStatus: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus()
+        switch authStatus {
+        case PHAuthorizationStatus.notDetermined:
+            if !request {
+                completion?(false, XFUserAuthorizationStatus.NotDetermined, NSError())
+                return
+            }
+
+            weak var weakSelf = self
+            PHPhotoLibrary.requestAuthorization { (status) in
+                weakSelf?.PhotosRightsCheckAndRequest(request: false, completion: completion)
+            }
+        case PHAuthorizationStatus.restricted:
+            completion?(false, XFUserAuthorizationStatus.Restricted, NSError())
+        case PHAuthorizationStatus.denied:
+            completion?(false, XFUserAuthorizationStatus.Denied, NSError())
+        case PHAuthorizationStatus.authorized:
+            completion?(true, XFUserAuthorizationStatus.Authorized, NSError())
+        }
+    }
+
+    func photoSavedCheckIsRgb(isRgb: Bool, success: Bool) {
+        if !success {
+            self.showAlertViewMsg(msg: isRgb ? "标准光 图片保存失败" : "偏振光 图片保存失败")
+            return
+        }
+
+        if 2 == self.successCount+self.failureCount && self.failureCount == 0 {
+            self.showAlertViewMsg(msg: "图片已保存至相册")
+        }
+    }
+
     //MARK:- CAMERA
     func prepareForCameraStart() {
         self.camera.renderingBitrate = 800
@@ -359,7 +453,11 @@ class EasyCameraViewController: UIViewController {
 
     func cameraStatusUpdate(isOK: Bool) {
         if !isOK {
-            self.showAlertViewMsg(msg: "摄像头发生错误，当前已关闭，可尝试重启或者退出当前控制器.")
+            if self.camera.isBlueStripConfirmed {
+                self.showAlertViewMsg(msg: "当前检测到蓝条，摄像头已关闭，可尝试重启或者退出当前控制器.")
+            } else {
+                self.showAlertViewMsg(msg: "摄像头发生错误，当前已关闭，可尝试重启或者退出当前控制器.")
+            }
             return
         }
 
